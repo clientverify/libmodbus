@@ -27,6 +27,13 @@
 #include <linux/serial.h>
 #endif
 
+// override inline assembly version of FD_ZERO from
+// /usr/include/x86_64-linux-gnu/bits/select.h
+#ifdef FD_ZERO
+#undef FD_ZERO
+#endif
+#define FD_ZERO(p)        memset((char *)(p), 0, sizeof(*(p)))
+
 /* Table of CRC values for high-order byte */
 static const uint8_t table_crc_hi[] = {
     0x00, 0xC1, 0x81, 0x40, 0x01, 0xC0, 0x80, 0x41, 0x01, 0xC0,

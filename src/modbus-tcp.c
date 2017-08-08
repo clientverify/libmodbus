@@ -55,6 +55,14 @@
 #include "modbus-tcp.h"
 #include "modbus-tcp-private.h"
 
+// override inline assembly version of FD_ZERO from
+// /usr/include/x86_64-linux-gnu/bits/select.h
+#ifdef FD_ZERO
+#undef FD_ZERO
+#endif
+#define FD_ZERO(p)        memset((char *)(p), 0, sizeof(*(p)))
+
+
 #ifdef OS_WIN32
 static int _modbus_tcp_init_win32(void)
 {

@@ -23,6 +23,13 @@
 #include "modbus.h"
 #include "modbus-private.h"
 
+// override inline assembly version of FD_ZERO from
+// /usr/include/x86_64-linux-gnu/bits/select.h
+#ifdef FD_ZERO
+#undef FD_ZERO
+#endif
+#define FD_ZERO(p)        memset((char *)(p), 0, sizeof(*(p)))
+
 /* Internal use */
 #define MSG_LENGTH_UNDEFINED -1
 
