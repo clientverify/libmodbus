@@ -153,7 +153,7 @@ AC_ARG_ENABLE(tests,
 	[enable_tests=yes])
 AM_CONDITIONAL(BUILD_TESTS, [test $enable_tests != no])
 
-AC_CONFIG_HEADERS([config.h tests/unit-test.h])
+AC_CONFIG_HEADERS([config.h tests/unit-test.h tests/generic-test.h])
 AC_CONFIG_FILES([
         Makefile
         src/Makefile

@@ -8,6 +8,8 @@ noinst_PROGRAMS = \
 	random-test-client \
 	unit-test-server \
 	unit-test-client \
+	generic-server \
+	generic-client \
 	version
 
 common_ldflags = \
@@ -40,6 +42,14 @@ unit_test_server_LDADD = $(common_ldflags)
 unit_test_client_SOURCES = unit-test-client.c unit-test.h
 unit_test_client_LDFLAGS = -static
 unit_test_client_LDADD = $(common_ldflags)
+
+generic_server_SOURCES = generic-server.c generic-params.h
+generic_server_LDFLAGS = -static
+generic_server_LDADD = $(common_ldflags)
+
+generic_client_SOURCES = generic-client.c generic-params.h
+generic_client_LDFLAGS = -static
+generic_client_LDADD = $(common_ldflags)
 
 version_SOURCES = version.c
 version_LDADD = $(common_ldflags)
