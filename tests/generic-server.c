@@ -22,7 +22,7 @@ int main(void)
     modbus_mapping_t *mb_mapping;
 
     ctx = modbus_new_tcp("127.0.0.1", 1502);
-    /* modbus_set_debug(ctx, TRUE); */
+    modbus_set_debug(ctx, TRUE);
 
     mb_mapping = modbus_mapping_new(500, 500, 500, 500);
     if (mb_mapping == NULL) {
