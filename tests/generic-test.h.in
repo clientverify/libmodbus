@@ -24,7 +24,7 @@
 
 #define SERVER_ID      17
 #define ADDRESS_START   0
-#define ADDRESS_END    99
+#define ADDRESS_END    0xFF
 
 const uint16_t UT_BITS_ADDRESS = 0x130;
 const uint16_t UT_BITS_NB = 0x25;

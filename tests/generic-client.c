@@ -39,6 +39,7 @@
 static int verbose_mode = FALSE;
 static int randomized_mode = 0;
 
+#define GENERIC_ADDR_MAX                      0xFFFF
 #define GENERIC_READ_COILS_MAX                2000
 #define GENERIC_WRITE_COILS_MAX               0x07B0   // 1968
 #define GENERIC_READ_REGISTERS_MAX            0x07D    // 125
@@ -123,17 +124,21 @@ static void usage(const char *progname);
 static int selftest();
 static void onetest(const char *name, int predicate, int *pass_count,
                     int *fail_count);
-static int randrange(int M, int N);
-static r_coils_t *parse_r_coils(const char *line);
-static w_coil_t *parse_w_coil(const char *line);
-static w_coils_t *parse_w_coils(const char *line);
-static r_registers_t *parse_r_registers(const char *line);
-static w_register_t *parse_w_register(const char *line);
-static w_registers_t *parse_w_registers(const char *line);
-static wr_registers_t *parse_wr_registers(const char *line);
+static int parse_r_coils(const char *line, generic_req_t *request);
+static int parse_w_coil(const char *line, generic_req_t *request);
+static int parse_w_coils(const char *line, generic_req_t *request);
+static int parse_r_registers(const char *line, generic_req_t *request);
+static int parse_w_register(const char *line, generic_req_t *request);
+static int parse_w_registers(const char *line, generic_req_t *request);
+static int parse_wr_registers(const char *line, generic_req_t *request);
+static int parse_generic_req(const char *line, generic_req_t *request);
 static generic_req_t *next_request(void);
 static enum REQUEST_TYPE get_request_type(const char *line);
 static int startswith(const char *s, const char *pattern);
+static char** splitline(char *line, int *num_tokens); // modifies line (strtok)
+static int splitlinetest(const char *line, int expected);
+static int randrange(int M, int N);
+static int string_to_int(const char *s);
 
 ////////////////////////////////////////////////////////////////////////////
 
@@ -503,6 +508,37 @@ static void onetest(const char *name, int predicate, int *pass_count,
     printf("Test #%4.4d | %s : %s\n", test_num, name, result_string);
 }
 
+static int splitlinetest(const char *line, int expected) {
+    char *linecopy = strdup(line);
+    int num_tokens = -1;
+    char **tokens = splitline(linecopy, &num_tokens);
+    free(tokens);
+    free(linecopy);
+    return (num_tokens == expected);
+}
+
+static int splitlinetestcontents(const char *line, int expected,
+                                 const char *tokens[]) {
+    char *linecopy = strdup(line);
+    int num_tokens = -1;
+    char **tokens2 = splitline(linecopy, &num_tokens);
+    if (num_tokens != expected) {
+        free(tokens2);
+        free(linecopy);
+        return 0;
+    }
+    int result = 1;
+    for (int i = 0; i < expected; i++) {
+        if (tokens == NULL || tokens2 == NULL ||
+            strcmp(tokens[i], tokens2[i]) != 0) {
+            result = 0;
+        }
+    }
+    free(tokens2);
+    free(linecopy);
+    return result;
+}
+
 static int selftest() {
     int pass = 0;
     int fail = 0;
@@ -511,6 +547,10 @@ static int selftest() {
     onetest("startswith1", startswith("Hello world", "Hello"), &pass, &fail);
     onetest("startswith2", !startswith("Bilb", "Bilbo"), &pass, &fail);
     onetest("startswith3", !startswith("bill", "bell"), &pass, &fail);
+
+    onetest("string_to_int1", string_to_int("42") == 42, &pass, &fail);
+    onetest("string_to_int2", string_to_int("0xFF") == 0xFF, &pass, &fail);
+    onetest("string_to_int3", string_to_int("0X3f") == 0x3F, &pass, & fail);
 
     onetest("get_request_type1",
             get_request_type("read_coils ") == READ_COILS,
@@ -537,6 +577,36 @@ static int selftest() {
             get_request_type("writeread_register ") == UNKNOWN_REQUEST_TYPE,
             &pass, &fail);
 
+    onetest("splitline1", splitlinetest("Frodo Baggins", 2), &pass, &fail);
+    onetest("splitline2", splitlinetest("  A  B C  ", 3), &pass, &fail);
+    onetest("splitline3", !splitlinetest("  A  B C  ", 4), &pass, &fail);
+    onetest("splitline4", splitlinetest("  A  B C D", 4), &pass, &fail);
+    onetest("splitline5", splitlinetest("", 0), &pass, &fail);
+    onetest("splitline6", splitlinetest("   ", 0), &pass, &fail);
+
+    const char *tokens7[] = {"A", "B", "C"};
+    onetest("splitline7", splitlinetestcontents(" A  B C   ", 3, tokens7),
+            &pass, &fail);
+
+    generic_req_t req;
+    int ret = parse_r_coils("read_coils 0x42 38", &req);
+    onetest("parse_r_coils1",
+            (req.type == READ_COILS) &&
+            (req.u.r_coils.addr == 0x42) && (req.u.r_coils.num == 38),
+            &pass, &fail);
+    ret = parse_w_coil("write_single_coil 0x42 1", &req);
+    onetest("parse_w_coil1",
+            (req.type == WRITE_SINGLE_COIL) &&
+            (req.u.w_coil.addr == 0x42) && (req.u.w_coil.bit == 1),
+            &pass, &fail);
+    ret = parse_w_coils("write_coils 0x42 3 1 1 0", &req);
+    onetest("parse_w_coils1",
+            (req.type == WRITE_COILS) &&
+            (req.u.w_coils.addr == 0x42) && (req.u.w_coils.num == 3) &&
+            (req.u.w_coils.bits[0] == 1) && (req.u.w_coils.bits[1] == 1) &&
+            (req.u.w_coils.bits[2] == 0),
+            &pass, &fail);
+
     printf("%d self-tests: %d pass, %d fail.\n", pass + fail, pass, fail);
     if (fail == 0) {
         return 0; // success
@@ -553,32 +623,300 @@ static int randrange(int M, int N) {
     return val;
 }
 
-static r_coils_t *parse_r_coils(const char *line) {
-    return NULL;
+// Parse either a decimal or hex string (starting with "0x") and return an int.
+static int string_to_int(const char *s)
+{
+    if (strlen(s) >= 2 &&
+        (startswith(s, "0x") || startswith(s, "0X"))) {
+        return (int) strtol(s, NULL, 16);
+    } else {
+        return atoi(s);
+    }
 }
 
-static w_coil_t *parse_w_coil(const char *line) {
-    return NULL;
+
+// NOTE: modifies line (strtok), return NULL if failure, or if there are no
+// tokens. Allocates memory that the caller must eventually free. Modifies
+// num_tokens to contain the number of tokens seen.
+static char** splitline(char *line, int *num_tokens) {
+    // capacity available for expandable array
+    int capacity = 1;
+
+    // Allocate token list (to be returned)
+    char **token_list = (char **) malloc(sizeof(char*) * capacity);
+
+    // Split line into tokens
+    int i = 0;
+    char *saveptr = NULL;
+    for (char *str = line; ; str = NULL, i++) {
+        char *token = strtok_r(str, " ", &saveptr);
+        if (!token)
+            break;
+        if (i >= capacity) {
+            capacity *= 2;
+            token_list = (char **)realloc(token_list, sizeof(char*) * capacity);
+        }
+        token_list[i] = token;
+    }
+
+    // Output: number of tokens seen
+    *num_tokens = i;
+
+    // If there are no tokens, return NULL
+    if (i == 0) {
+        free(token_list);
+        return NULL;
+    } else {
+        return token_list;
+    }
 }
 
-static w_coils_t *parse_w_coils(const char *line) {
-    return NULL;
+static int parse_generic_req(const char *line, generic_req_t *request) {
+    int ret = -1;
+    enum REQUEST_TYPE req_type = get_request_type(line);
+    if (req_type == UNKNOWN_REQUEST_TYPE) {
+        fprintf(stderr, "Unknown request type: %s", line);
+        return -1;
+    }
+    switch (req_type) {
+    case READ_COILS:
+        ret = parse_r_coils(line, request);
+        break;
+    case WRITE_SINGLE_COIL:
+        ret = parse_w_coil(line, request);
+        break;
+    case WRITE_COILS:
+        ret = parse_w_coils(line, request);
+        break;
+    case READ_REGISTERS:
+        ret = parse_r_registers(line, request);
+        break;
+    case WRITE_SINGLE_REGISTER:
+        ret = parse_w_register(line, request);
+        break;
+    case WRITE_REGISTERS:
+        ret = parse_w_registers(line, request);
+        break;
+    case WRITEREAD_REGISTERS:
+        ret = parse_wr_registers(line, request);
+        break;
+    default:
+        assert(FALSE); // should never happen
+    }
+    return ret;
 }
 
-static r_registers_t *parse_r_registers(const char *line) {
-    return NULL;
+static int parse_r_coils(const char *line, generic_req_t *request) {
+    char *linecopy = strdup(line);
+    const char *TYPE_STRING = "read_coils";
+    const int TOKENS_EXPECTED = 3;
+    int num_tokens = 0;
+
+    char **tokens = splitline(linecopy, &num_tokens);
+    if (!tokens) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(linecopy);
+        return -1;
+    }
+    if (num_tokens != TOKENS_EXPECTED) {
+        fprintf(stderr, "Error: expected %d tokens, got %d\n",
+                TOKENS_EXPECTED, num_tokens);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // "read_coils"
+    if (strcmp(tokens[0], TYPE_STRING) != 0) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address (0x0000 - 0xFFFF)
+    int addr = string_to_int(tokens[1]);
+    if (addr < 0 || addr > GENERIC_ADDR_MAX ||
+        addr < ADDRESS_START || addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // decimal count of bits (1 - 2000)
+    int num = string_to_int(tokens[2]);
+    if (num < 1 || num > GENERIC_READ_COILS_MAX ||
+        (addr + num - 1 > ADDRESS_END)) {
+        fprintf(stderr, "Error: %s num out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // all checks ok; write to output struct
+    request->type = READ_COILS;
+    request->u.r_coils.addr = addr;
+    request->u.r_coils.num = num;
+
+    // cleanup
+    free(tokens);
+    free(linecopy);
+    return 0;
 }
 
-static w_register_t *parse_w_register(const char *line) {
-    return NULL;
+static int parse_w_coil(const char *line, generic_req_t *request) {
+    char *linecopy = strdup(line);
+    const char *TYPE_STRING = "write_single_coil";
+    const int TOKENS_EXPECTED = 3;
+    int num_tokens = 0;
+
+    char **tokens = splitline(linecopy, &num_tokens);
+    if (!tokens) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(linecopy);
+        return -1;
+    }
+    if (num_tokens != TOKENS_EXPECTED) {
+        fprintf(stderr, "Error: expected %d tokens, got %d\n",
+                TOKENS_EXPECTED, num_tokens);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // "write_single_coil"
+    if (strcmp(tokens[0], TYPE_STRING) != 0) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address (0x0000 - 0xFFFF)
+    int addr = string_to_int(tokens[1]);
+    if (addr < 0 || addr > GENERIC_ADDR_MAX ||
+        addr < ADDRESS_START || addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // bit value (0 or 1)
+    int bit = string_to_int(tokens[2]);
+    if (bit != 0 && bit != 1) {
+        fprintf(stderr, "Error: %s illegal bit value\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // all checks ok; write to output struct
+    request->type = WRITE_SINGLE_COIL;
+    request->u.w_coil.addr = addr;
+    request->u.w_coil.bit = bit;
+
+    // cleanup
+    free(tokens);
+    free(linecopy);
+    return 0;
 }
 
-static w_registers_t *parse_w_registers(const char *line) {
-    return NULL;
+static int parse_w_coils(const char *line, generic_req_t *request) {
+    char *linecopy = strdup(line);
+    const char *TYPE_STRING = "write_coils";
+    const int TOKEN_MIN = 4;
+    const int TOKEN_MAX = 3 + GENERIC_WRITE_COILS_MAX;
+    int num_tokens = 0;
+
+    char **tokens = splitline(linecopy, &num_tokens);
+    if (!tokens) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(linecopy);
+        return -1;
+    }
+    if (num_tokens < TOKEN_MIN || num_tokens > TOKEN_MAX) {
+        fprintf(stderr, "Error: expected %d-%d tokens, got %d\n",
+                TOKEN_MIN, TOKEN_MAX, num_tokens);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // "write_coils"
+    if (strcmp(tokens[0], TYPE_STRING) != 0) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address (0x0000 - 0xFFFF)
+    int addr = string_to_int(tokens[1]);
+    if (addr < 0 || addr > GENERIC_ADDR_MAX ||
+        addr < ADDRESS_START || addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // decimal count of bits (1 - 2000)
+    int num = string_to_int(tokens[2]);
+    if (num < 1 || num > GENERIC_WRITE_COILS_MAX ||
+        addr + num - 1 > ADDRESS_END) {
+        fprintf(stderr, "Error: %s illegal number of bits\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+    if (num != num_tokens - 3) {
+        fprintf(stderr, "Error: %s number of bits mismatch\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // check bits for legal values
+    for (int i = 0; i < num; i++) {
+        int bit = string_to_int(tokens[3+i]);
+        if (bit != 0 && bit != 1) {
+            fprintf(stderr, "Error: %s illegal bit value\n", TYPE_STRING);
+            free(tokens);
+            free(linecopy);
+            return -1;
+        }
+    }
+
+    // all checks ok; write to output struct
+    request->type = WRITE_COILS;
+    request->u.w_coils.addr = addr;
+    request->u.w_coils.num = num;
+    for (int i = 0; i < num; i++) {
+        request->u.w_coils.bits[i] = string_to_int(tokens[3+i]);
+    }
+
+    // cleanup
+    free(tokens);
+    free(linecopy);
+    return 0;
 }
 
-static wr_registers_t *parse_wr_registers(const char *line) {
-    return NULL;
+static int parse_r_registers(const char *line, generic_req_t *request) {
+    return 0;
+}
+
+static int parse_w_register(const char *line, generic_req_t *request) {
+    return 0;
+}
+
+static int parse_w_registers(const char *line, generic_req_t *request) {
+    return 0;
+}
+
+static int parse_wr_registers(const char *line, generic_req_t *request) {
+    return 0;
 }
 
 static enum REQUEST_TYPE get_request_type(const char *line) {
@@ -614,20 +952,25 @@ static generic_req_t *next_request(void) {
     char *line = NULL;
     size_t line_len = 0;
     ssize_t line_read = 0;
+    int ret = -1; // parse return code (0 on success)
+    generic_req_t request;
+
     line_read = getline(&line, &line_len, stdin);
     if (line_read != -1) {
-        enum REQUEST_TYPE req_type = get_request_type(line);
-        if (req_type == UNKNOWN_REQUEST_TYPE) {
-            fprintf(stderr, "Unknown request type: %s", line);
-            free(line);
-            return NULL;
-        }
-        // FIXME: actually parse the thing
+        ret = parse_generic_req(line, &request);
     }
     if (line) {
         free(line);
     }
-    return NULL;
+
+    // If parsing into request was successful, allocate on heap and return
+    if (ret == 0) {
+        generic_req_t *req = (generic_req_t *) malloc(sizeof(request));
+        *req = request;
+        return req;
+    } else {
+        return NULL;
+    }
 }
 
 static int startswith(const char *string, const char *pattern) {
