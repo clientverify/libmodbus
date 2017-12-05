@@ -46,6 +46,7 @@ static int randomized_mode = 0;
 #define GENERIC_WRITE_REGISTERS_MAX           0x07B    // 123
 #define GENERIC_WRITEREAD_REGISTERS_READ_MAX  0x07D    // 125
 #define GENERIC_WRITEREAD_REGISTERS_WRITE_MAX 0x079    // 121
+#define GENERIC_REGISTER_VAL_MAX              0xFFFF
 
 // The following have been moved to generic-test.h
 // #define SERVER_ID       17
@@ -606,6 +607,36 @@ static int selftest() {
             (req.u.w_coils.bits[0] == 1) && (req.u.w_coils.bits[1] == 1) &&
             (req.u.w_coils.bits[2] == 0),
             &pass, &fail);
+    ret = parse_r_registers("read_registers 0x42 39", &req);
+    onetest("parse_r_registers1",
+            (req.type == READ_REGISTERS) &&
+            (req.u.r_regs.addr == 0x42) && (req.u.r_regs.num == 39),
+            &pass, &fail);
+    ret = parse_w_register("write_single_register 0x46 0xBEEF", &req);
+    onetest("parse_w_register1",
+            (req.type == WRITE_SINGLE_REGISTER) &&
+            (req.u.w_reg.addr == 0x46) && (req.u.w_reg.val == 0xBEEF),
+            &pass, &fail);
+    ret = parse_w_registers("write_registers 0x42 3 0xEA75 0xDEAD 0xBEEF",
+                            &req);
+    onetest("parse_w_registers1",
+            (req.type == WRITE_REGISTERS) &&
+            (req.u.w_regs.addr == 0x42) && (req.u.w_regs.num == 3) &&
+            (req.u.w_regs.vals[0] == 0xEA75) &&
+            (req.u.w_regs.vals[1] == 0xDEAD) &&
+            (req.u.w_regs.vals[2] == 0xBEEF),
+            &pass, &fail);
+    ret = parse_wr_registers("writeread_registers 0x44 5 0x55 3 "
+                             "0xCAFE 0xBA5E 0xBA11",
+                             &req);
+    onetest("parse_wr_registers1",
+            (req.type == WRITEREAD_REGISTERS) &&
+            (req.u.wr_regs.r_addr == 0x44) && (req.u.wr_regs.r_num == 5) &&
+            (req.u.wr_regs.w_addr == 0x55) && (req.u.wr_regs.w_num == 3) &&
+            (req.u.wr_regs.vals[0] == 0xCAFE) &&
+            (req.u.wr_regs.vals[1] == 0xBA5E) &&
+            (req.u.wr_regs.vals[2] == 0xBA11),
+            &pass, &fail);
 
     printf("%d self-tests: %d pass, %d fail.\n", pass + fail, pass, fail);
     if (fail == 0) {
@@ -636,8 +667,10 @@ static int string_to_int(const char *s)
 
 
 // NOTE: modifies line (strtok), return NULL if failure, or if there are no
-// tokens. Allocates memory that the caller must eventually free. Modifies
-// num_tokens to contain the number of tokens seen.
+// tokens. Allocates memory for the returned array of pointers that the caller
+// must eventually free. Note that the pointers themselves simply point into the
+// "line" input string, and not to newly allocated memory.  This function writes
+// *num_tokens to be the number of tokens seen.
 static char** splitline(char *line, int *num_tokens) {
     // capacity available for expandable array
     int capacity = 1;
@@ -904,18 +937,308 @@ static int parse_w_coils(const char *line, generic_req_t *request) {
 }
 
 static int parse_r_registers(const char *line, generic_req_t *request) {
+    char *linecopy = strdup(line);
+    const char *TYPE_STRING = "read_registers";
+    const int TOKENS_EXPECTED = 3;
+    int num_tokens = 0;
+
+    char **tokens = splitline(linecopy, &num_tokens);
+    if (!tokens) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(linecopy);
+        return -1;
+    }
+    if (num_tokens != TOKENS_EXPECTED) {
+        fprintf(stderr, "Error: expected %d tokens, got %d\n",
+                TOKENS_EXPECTED, num_tokens);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // "read_registers"
+    if (strcmp(tokens[0], TYPE_STRING) != 0) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address (0x0000 - 0xFFFF)
+    int addr = string_to_int(tokens[1]);
+    if (addr < 0 || addr > GENERIC_ADDR_MAX ||
+        addr < ADDRESS_START || addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // decimal count of registers (1 - 125)
+    int num = string_to_int(tokens[2]);
+    if (num < 1 || num > GENERIC_READ_REGISTERS_MAX ||
+        (addr + num - 1 > ADDRESS_END)) {
+        fprintf(stderr, "Error: %s num out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // all checks ok; write to output struct
+    request->type = READ_REGISTERS;
+    request->u.r_regs.addr = addr;
+    request->u.r_regs.num = num;
+
+    // cleanup
+    free(tokens);
+    free(linecopy);
     return 0;
 }
 
 static int parse_w_register(const char *line, generic_req_t *request) {
+    char *linecopy = strdup(line);
+    const char *TYPE_STRING = "write_single_register";
+    const int TOKENS_EXPECTED = 3;
+    int num_tokens = 0;
+
+    char **tokens = splitline(linecopy, &num_tokens);
+    if (!tokens) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(linecopy);
+        return -1;
+    }
+    if (num_tokens != TOKENS_EXPECTED) {
+        fprintf(stderr, "Error: expected %d tokens, got %d\n",
+                TOKENS_EXPECTED, num_tokens);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // "write_single_register"
+    if (strcmp(tokens[0], TYPE_STRING) != 0) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address (0x0000 - 0xFFFF)
+    int addr = string_to_int(tokens[1]);
+    if (addr < 0 || addr > GENERIC_ADDR_MAX ||
+        addr < ADDRESS_START || addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // 2-byte hex value (0x0000 - 0xFFFF)
+    int val = string_to_int(tokens[2]);
+    if (val < 0 || val > GENERIC_REGISTER_VAL_MAX) {
+        fprintf(stderr, "Error: %s value out of bounds: %d\n",
+                    TYPE_STRING, val);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // all checks ok; write to output struct
+    request->type = WRITE_SINGLE_REGISTER;
+    request->u.w_reg.addr = addr;
+    request->u.w_reg.val = val;
+
+    // cleanup
+    free(tokens);
+    free(linecopy);
     return 0;
 }
 
 static int parse_w_registers(const char *line, generic_req_t *request) {
+    char *linecopy = strdup(line);
+    const char *TYPE_STRING = "write_registers";
+    const int TOKEN_MIN = 4;
+    const int TOKEN_MAX = 3 + GENERIC_WRITE_REGISTERS_MAX;
+    int num_tokens = 0;
+
+    char **tokens = splitline(linecopy, &num_tokens);
+    if (!tokens) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(linecopy);
+        return -1;
+    }
+    if (num_tokens < TOKEN_MIN || num_tokens > TOKEN_MAX) {
+        fprintf(stderr, "Error: expected %d-%d tokens, got %d\n",
+                TOKEN_MIN, TOKEN_MAX, num_tokens);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // "write_registers"
+    if (strcmp(tokens[0], TYPE_STRING) != 0) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address (0x0000 - 0xFFFF)
+    int addr = string_to_int(tokens[1]);
+    if (addr < 0 || addr > GENERIC_ADDR_MAX ||
+        addr < ADDRESS_START || addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // decimal count of registers (1 - 123)
+    int num = string_to_int(tokens[2]);
+    if (num < 1 || num > GENERIC_WRITE_REGISTERS_MAX ||
+        addr + num - 1 > ADDRESS_END) {
+        fprintf(stderr, "Error: %s illegal number of registers\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+    if (num != num_tokens - 3) {
+        fprintf(stderr, "Error: %s number of registers mismatch\n",
+                TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // check registers for legal values
+    for (int i = 0; i < num; i++) {
+        int val = string_to_int(tokens[3+i]);
+        if (val < 0 && val > GENERIC_REGISTER_VAL_MAX) {
+            fprintf(stderr, "Error: %s illegal register value: %d\n",
+                    TYPE_STRING, val);
+            free(tokens);
+            free(linecopy);
+            return -1;
+        }
+    }
+
+    // all checks ok; write to output struct
+    request->type = WRITE_REGISTERS;
+    request->u.w_regs.addr = addr;
+    request->u.w_regs.num = num;
+    for (int i = 0; i < num; i++) {
+        request->u.w_regs.vals[i] = string_to_int(tokens[3+i]);
+    }
+
+    // cleanup
+    free(tokens);
+    free(linecopy);
     return 0;
 }
 
 static int parse_wr_registers(const char *line, generic_req_t *request) {
+    char *linecopy = strdup(line);
+    const char *TYPE_STRING = "writeread_registers";
+    const int TOKEN_MIN = 6;
+    const int TOKEN_MAX = 5 + GENERIC_WRITE_REGISTERS_MAX;
+    int num_tokens = 0;
+
+    char **tokens = splitline(linecopy, &num_tokens);
+    if (!tokens) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(linecopy);
+        return -1;
+    }
+    if (num_tokens < TOKEN_MIN || num_tokens > TOKEN_MAX) {
+        fprintf(stderr, "Error: expected %d-%d tokens, got %d\n",
+                TOKEN_MIN, TOKEN_MAX, num_tokens);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // "writeread_registers"
+    if (strcmp(tokens[0], TYPE_STRING) != 0) {
+        fprintf(stderr, "Error parsing line: %s", line);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address for read (0x0000 - 0xFFFF)
+    int r_addr = string_to_int(tokens[1]);
+    if (r_addr < 0 || r_addr > GENERIC_ADDR_MAX ||
+        r_addr < ADDRESS_START || r_addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s r_addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // decimal count of registers to read (1 - 125)
+    int r_num = string_to_int(tokens[2]);
+    if (r_num < 1 || r_num > GENERIC_WRITEREAD_REGISTERS_READ_MAX ||
+        r_addr + r_num - 1 > ADDRESS_END) {
+        fprintf(stderr, "Error: %s illegal number of registers to read: %d\n",
+                TYPE_STRING, r_num);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // hex address for write (0x0000 - 0xFFFF)
+    int w_addr = string_to_int(tokens[3]);
+    if (w_addr < 0 || w_addr > GENERIC_ADDR_MAX ||
+        w_addr < ADDRESS_START || w_addr > ADDRESS_END) {
+        fprintf(stderr, "Error: %s w_addr out of bounds\n", TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // decimal count of registers to write (1 - 121)
+    int w_num = string_to_int(tokens[4]);
+    if (w_num < 1 || w_num > GENERIC_WRITEREAD_REGISTERS_WRITE_MAX ||
+        w_addr + w_num - 1 > ADDRESS_END) {
+        fprintf(stderr, "Error: %s illegal number of registers to write:%d\n",
+                TYPE_STRING, w_num);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+    if (w_num != num_tokens - 5) {
+        fprintf(stderr, "Error: %s number of registers mismatch\n",
+                TYPE_STRING);
+        free(tokens);
+        free(linecopy);
+        return -1;
+    }
+
+    // check registers for legal values
+    for (int i = 0; i < w_num; i++) {
+        int val = string_to_int(tokens[5+i]);
+        if (val < 0 && val > GENERIC_REGISTER_VAL_MAX) {
+            fprintf(stderr, "Error: %s illegal register value: %d\n",
+                    TYPE_STRING, val);
+            free(tokens);
+            free(linecopy);
+            return -1;
+        }
+    }
+
+    // all checks ok; write to output struct
+    request->type = WRITEREAD_REGISTERS;
+    request->u.wr_regs.r_addr = r_addr;
+    request->u.wr_regs.r_num = r_num;
+    request->u.wr_regs.w_addr = w_addr;
+    request->u.wr_regs.w_num = w_num;
+    for (int i = 0; i < w_num; i++) {
+        request->u.wr_regs.vals[i] = string_to_int(tokens[5+i]);
+    }
+
+    // cleanup
+    free(tokens);
+    free(linecopy);
     return 0;
 }
 
