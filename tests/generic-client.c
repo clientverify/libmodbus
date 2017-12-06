@@ -133,7 +133,7 @@ static int parse_w_register(const char *line, generic_req_t *request);
 static int parse_w_registers(const char *line, generic_req_t *request);
 static int parse_wr_registers(const char *line, generic_req_t *request);
 static int parse_generic_req(const char *line, generic_req_t *request);
-static generic_req_t *next_request(void);
+static int next_request(generic_req_t *req);
 static enum REQUEST_TYPE get_request_type(const char *line);
 static int startswith(const char *s, const char *pattern);
 static char** splitline(char *line, int *num_tokens); // modifies line (strtok)
@@ -206,7 +206,6 @@ int main(int argc, char *argv[])
     modbus_t *ctx;
     int rc;
     int nb_fail;
-    int addr = 0;
     int nb;
     uint8_t *tab_rq_bits;
     uint8_t *tab_rp_bits;
@@ -339,137 +338,89 @@ int main(int argc, char *argv[])
 
     nb_fail = 0;
 
-    char *line = NULL;
-    size_t line_len = 0;
-    ssize_t line_read = 0;
-    while ((line_read = getline(&line, &line_len, stdin)) != -1) {
-        int i;
-
-        nb = ADDRESS_END - addr;
-
-        /* WRITE BIT */
-        rc = modbus_write_bit(ctx, addr, tab_rq_bits[0]);
-        if (rc != 1) {
-            printf("ERROR modbus_write_bit (%d)\n", rc);
-            printf("Address = %d, value = %d\n", addr, tab_rq_bits[0]);
-            nb_fail++;
-        } else {
-            rc = modbus_read_bits(ctx, addr, 1, tab_rp_bits);
-            if (rc != 1 || tab_rq_bits[0] != tab_rp_bits[0]) {
-                printf("ERROR modbus_read_bits single (%d)\n", rc);
-                printf("address = %d\n", addr);
+    generic_req_t req;
+    int ret;
+    while ((ret = next_request(&req)) == 1) {
+        switch (req.type) {
+        case READ_COILS:
+            rc = modbus_read_bits(ctx, req.u.r_coils.addr, req.u.r_coils.num,
+                                  tab_rp_bits);
+            if (rc != req.u.r_coils.num) {
+                fprintf(stderr, "ERROR modbus_read_bits (%d)\n", rc);
+                fprintf(stderr, "Address = %d, num = %d\n",
+                        req.u.r_coils.addr, req.u.r_coils.num);
                 nb_fail++;
             }
-        }
-
-        /* MULTIPLE BITS */
-        rc = modbus_write_bits(ctx, addr, nb, tab_rq_bits);
-        if (rc != nb) {
-            printf("ERROR modbus_write_bits (%d)\n", rc);
-            printf("Address = %d, nb = %d\n", addr, nb);
-            nb_fail++;
-        } else {
-            rc = modbus_read_bits(ctx, addr, nb, tab_rp_bits);
-            if (rc != nb) {
-                printf("ERROR modbus_read_bits\n");
-                printf("Address = %d, nb = %d\n", addr, nb);
-                nb_fail++;
-            } else {
-                for (i=0; i<nb; i++) {
-                    if (tab_rp_bits[i] != tab_rq_bits[i]) {
-                        printf("ERROR modbus_read_bits\n");
-                        printf("Address = %d, value %d (0x%X) != %d (0x%X)\n",
-                               addr, tab_rq_bits[i], tab_rq_bits[i],
-                               tab_rp_bits[i], tab_rp_bits[i]);
-                        nb_fail++;
-                    }
-                }
-            }
-        }
-
-        /* SINGLE REGISTER */
-        rc = modbus_write_register(ctx, addr, tab_rq_registers[0]);
-        if (rc != 1) {
-            printf("ERROR modbus_write_register (%d)\n", rc);
-            printf("Address = %d, value = %d (0x%X)\n",
-                   addr, tab_rq_registers[0], tab_rq_registers[0]);
-            nb_fail++;
-        } else {
-            rc = modbus_read_registers(ctx, addr, 1, tab_rp_registers);
+            break;
+        case WRITE_SINGLE_COIL:
+            rc = modbus_write_bit(ctx, req.u.w_coil.addr, req.u.w_coil.bit);
             if (rc != 1) {
-                printf("ERROR modbus_read_registers single (%d)\n", rc);
-                printf("Address = %d\n", addr);
+                fprintf(stderr, "ERROR modbus_write_bit (%d)\n", rc);
+                fprintf(stderr, "Address = %d, value = %d\n",
+                        req.u.w_coil.addr, req.u.w_coil.bit);
                 nb_fail++;
-            } else {
-                if (tab_rq_registers[0] != tab_rp_registers[0]) {
-                    printf("ERROR modbus_read_registers single\n");
-                    printf("Address = %d, value = %d (0x%X) != %d (0x%X)\n",
-                           addr, tab_rq_registers[0], tab_rq_registers[0],
-                           tab_rp_registers[0], tab_rp_registers[0]);
-                    nb_fail++;
-                }
             }
-        }
-
-        /* MULTIPLE REGISTERS */
-        rc = modbus_write_registers(ctx, addr, nb, tab_rq_registers);
-        if (rc != nb) {
-            printf("ERROR modbus_write_registers (%d)\n", rc);
-            printf("Address = %d, nb = %d\n", addr, nb);
-            nb_fail++;
-        } else {
-            rc = modbus_read_registers(ctx, addr, nb, tab_rp_registers);
-            if (rc != nb) {
-                printf("ERROR modbus_read_registers (%d)\n", rc);
-                printf("Address = %d, nb = %d\n", addr, nb);
+            break;
+        case WRITE_COILS:
+            rc = modbus_write_bits(ctx, req.u.w_coils.addr, req.u.w_coils.num,
+                                   req.u.w_coils.bits);
+            if (rc != req.u.w_coils.num) {
+                fprintf(stderr, "ERROR modbus_write_bits (%d)\n", rc);
+                fprintf(stderr, "Address = %d, num = %d\n",
+                        req.u.w_coils.addr, req.u.w_coils.num);
                 nb_fail++;
-            } else {
-                for (i=0; i<nb; i++) {
-                    if (tab_rq_registers[i] != tab_rp_registers[i]) {
-                        printf("ERROR modbus_read_registers\n");
-                        printf("Address = %d, value %d (0x%X) != %d (0x%X)\n",
-                               addr, tab_rq_registers[i], tab_rq_registers[i],
-                               tab_rp_registers[i], tab_rp_registers[i]);
-                        nb_fail++;
-                    }
-                }
             }
-        }
-        /* R/W MULTIPLE REGISTERS */
-        rc = modbus_write_and_read_registers(ctx,
-                                             addr, nb, tab_rw_rq_registers,
-                                             addr, nb, tab_rp_registers);
-        if (rc != nb) {
-            printf("ERROR modbus_read_and_write_registers (%d)\n", rc);
-            printf("Address = %d, nb = %d\n", addr, nb);
-            nb_fail++;
-        } else {
-            for (i=0; i<nb; i++) {
-                if (tab_rp_registers[i] != tab_rw_rq_registers[i]) {
-                    printf("ERROR modbus_read_and_write_registers READ\n");
-                    printf("Address = %d, value %d (0x%X) != %d (0x%X)\n",
-                           addr, tab_rp_registers[i], tab_rw_rq_registers[i],
-                           tab_rp_registers[i], tab_rw_rq_registers[i]);
-                    nb_fail++;
-                }
-            }
-
-            rc = modbus_read_registers(ctx, addr, nb, tab_rp_registers);
-            if (rc != nb) {
-                printf("ERROR modbus_read_registers (%d)\n", rc);
-                printf("Address = %d, nb = %d\n", addr, nb);
+            break;
+        case READ_REGISTERS:
+            rc = modbus_read_registers(ctx, req.u.r_regs.addr,
+                                       req.u.r_regs.num, tab_rp_registers);
+            if (rc != req.u.r_regs.num) {
+                fprintf(stderr, "ERROR modbus_read_registers (%d)\n", rc);
+                fprintf(stderr, "Address = %d, num = %d\n",
+                       req.u.r_regs.addr, req.u.r_regs.num);
                 nb_fail++;
-            } else {
-                for (i=0; i<nb; i++) {
-                    if (tab_rw_rq_registers[i] != tab_rp_registers[i]) {
-                        printf("ERROR modbus_read_and_write_registers WRITE\n");
-                        printf("Address = %d, value %d (0x%X) != %d (0x%X)\n",
-                               addr, tab_rw_rq_registers[i], tab_rw_rq_registers[i],
-                               tab_rp_registers[i], tab_rp_registers[i]);
-                        nb_fail++;
-                    }
-                }
             }
+            break;
+        case WRITE_SINGLE_REGISTER:
+            rc = modbus_write_register(ctx, req.u.w_reg.addr,
+                                       req.u.w_reg.val);
+            if (rc != 1) {
+                fprintf(stderr, "ERROR modbus_write_register (%d)\n", rc);
+                fprintf(stderr, "Address = %d, value = %d (0x%X)\n",
+                        req.u.w_reg.addr, req.u.w_reg.val, req.u.w_reg.val);
+                nb_fail++;
+            }
+            break;
+        case WRITE_REGISTERS:
+            rc = modbus_write_registers(ctx, req.u.w_regs.addr,
+                                        req.u.w_regs.num, req.u.w_regs.vals);
+            if (rc != req.u.w_regs.num) {
+                fprintf(stderr, "ERROR modbus_write_registers (%d)\n", rc);
+                fprintf(stderr, "Address = %d, num = %d\n", req.u.w_regs.addr,
+                       req.u.w_regs.num);
+                nb_fail++;
+            }
+            break;
+        case WRITEREAD_REGISTERS:
+            rc = modbus_write_and_read_registers(ctx,
+                                                 req.u.wr_regs.w_addr,
+                                                 req.u.wr_regs.w_num,
+                                                 req.u.wr_regs.vals,
+                                                 req.u.wr_regs.r_addr,
+                                                 req.u.wr_regs.r_num,
+                                                 tab_rp_registers);
+            if (rc != req.u.wr_regs.r_num) {
+                fprintf(stderr, "ERROR modbus_read_and_write_registers (%d)\n", rc);
+                fprintf(stderr, "write_address = %d, write_num = %d\n",
+                        req.u.wr_regs.w_addr, req.u.wr_regs.w_num);
+                fprintf(stderr, "read_address = %d, read_num = %d\n",
+                        req.u.wr_regs.r_addr, req.u.wr_regs.r_num);
+                nb_fail++;
+            }
+            break;
+        default:
+            assert(FALSE); // this should never happen
+            break;
         }
     }
 
@@ -485,10 +436,6 @@ int main(int argc, char *argv[])
     free(tab_rq_registers);
     free(tab_rp_registers);
     free(tab_rw_rq_registers);
-    if (line) {
-        free(line);
-        line = NULL;
-    }
 
     /* Close the connection */
     modbus_close(ctx);
@@ -630,6 +577,17 @@ static int selftest() {
                              "0xCAFE 0xBA5E 0xBA11",
                              &req);
     onetest("parse_wr_registers1",
+            (req.type == WRITEREAD_REGISTERS) &&
+            (req.u.wr_regs.r_addr == 0x44) && (req.u.wr_regs.r_num == 5) &&
+            (req.u.wr_regs.w_addr == 0x55) && (req.u.wr_regs.w_num == 3) &&
+            (req.u.wr_regs.vals[0] == 0xCAFE) &&
+            (req.u.wr_regs.vals[1] == 0xBA5E) &&
+            (req.u.wr_regs.vals[2] == 0xBA11),
+            &pass, &fail);
+    ret = parse_generic_req("writeread_registers 0x44 5 0x55 3 "
+                            "0xCAFE 0xBA5E 0xBA11",
+                            &req);
+    onetest("parse_generic_req1",
             (req.type == WRITEREAD_REGISTERS) &&
             (req.u.wr_regs.r_addr == 0x44) && (req.u.wr_regs.r_num == 5) &&
             (req.u.wr_regs.w_addr == 0x55) && (req.u.wr_regs.w_num == 3) &&
@@ -1262,13 +1220,15 @@ static enum REQUEST_TYPE get_request_type(const char *line) {
     }
 }
 
-static generic_req_t *next_request(void) {
+// If acquisition/generation of next request is successful, populate *req
+// pointer and return 1. Otherwise return 0 (no more data) or -1 (error).
+static int next_request(generic_req_t *req) {
 
     // In random mode, ignore stdin and just generate requests randomly
     if (randomized_mode) {
         int x = randrange(0,10);
         x++;
-        return NULL;
+        return 0; // FIXME: actually create a random request
     }
 
     // Otherwise, read a line from stdin and parse it into a request.
@@ -1279,20 +1239,19 @@ static generic_req_t *next_request(void) {
     generic_req_t request;
 
     line_read = getline(&line, &line_len, stdin);
-    if (line_read != -1) {
-        ret = parse_generic_req(line, &request);
-    }
-    if (line) {
+    if (line_read == -1) {
         free(line);
+        return 0; // no more data
     }
+    ret = parse_generic_req(line, &request);
+    free(line);
 
     // If parsing into request was successful, allocate on heap and return
     if (ret == 0) {
-        generic_req_t *req = (generic_req_t *) malloc(sizeof(request));
         *req = request;
-        return req;
+        return 1; // success
     } else {
-        return NULL;
+        return -1; // error parsing line
     }
 }
 
