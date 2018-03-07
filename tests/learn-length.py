@@ -2,6 +2,7 @@
 
 from sklearn import tree
 from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import AdaBoostClassifier
 import sys
 
 # >>> from sklearn import tree
@@ -27,7 +28,13 @@ for line in sys.stdin:
 X = raw_data
 Y = raw_lengths
 
+print("Loaded %d samples ranging from %d-%d bytes" %
+      (len(raw_data), min(raw_lengths), max(raw_lengths)))
+
 clf = tree.DecisionTreeClassifier()
+scores = cross_val_score(clf, X, Y, cv=5)
+print("Decision Tree Classifier scores:", scores)
+
 # clf.fit(X,Y)
 # print "Done"
 
@@ -40,5 +47,6 @@ clf = tree.DecisionTreeClassifier()
 #         status = "WRONG"
 #     print(Y[i], Yprime[i], status)
 
-scores = cross_val_score(clf, X, Y, cv=5)
-print(scores)
+adaboost_clf = AdaBoostClassifier(n_estimators=10)
+scores = cross_val_score(adaboost_clf, X, Y, cv=5)
+print("AdaBoost Classifier scores:", scores)
