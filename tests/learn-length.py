@@ -70,13 +70,14 @@ print("Loaded %d samples ranging from %d-%d bytes in %f seconds" %
 # Try out neural network
 print("Trying out a Neural Network!")
 import numpy as np
+np.set_printoptions(threshold=np.nan)
 
 """
 PyTorch: nn
 -----------
 
-A fully-connected ReLU network with one hidden layer, trained to predict y from x
-by minimizing squared Euclidean distance.
+A fully-connected ReLU network with two hidden layers, trained to predict
+y from x by minimizing squared Euclidean distance.
 
 This implementation uses the nn package from PyTorch to build the network.
 PyTorch autograd makes it easy to define computational graphs and take gradients,
@@ -90,7 +91,7 @@ from torch.autograd import Variable
 
 # N is batch size; D_in is input dimension;
 # H is hidden dimension; D_out is output dimension.
-N, D_in, H, D_out = 3000, TARGET_LEN, 30, 1
+N, D_in, H, D_out = 4000, TARGET_LEN, 30, 1
 
 # Create random Tensors to hold inputs and outputs, and wrap them in Variables.
 # x = Variable(torch.randn(N, D_in))
