@@ -66,9 +66,13 @@ Example: 500 30 10 1""")
 
     INPUT_FEATURES = args.layersizes[0] # input dimension
     if args.layersizes[-1] != 1:
-        print("Number of units per layer: ", args.layersizes)
+        eprint("Number of units per layer: ", args.layersizes)
         parser.error("The final layer must be a single unit, but got %d." %
                      args.layersizes[-1])
+    if args.batchsize > args.trainsize or \
+       args.trainsize % args.batchsize != 0:
+        parser.error("Batch size (%d) must divide training data size (%d)" %
+                     (args.batchsize, args.trainsize))
     if args.veryverbose: # veryverbose implies verbose
         args.verbose = True
 
@@ -96,14 +100,14 @@ Example: 500 30 10 1""")
     print("-"*70)
     print("Test-on-Train Accuracy")
     print("-"*70)
-    accuracy = compute_accuracy(trainY, trainY_predict, trainX)
+    accuracy = compute_and_print_accuracy(trainY, trainY_predict, trainX)
 
     # Run the model on the dev set
     devY_predict = run_model(model, devX)
     print("-"*70)
     print("Hold-out Cross Validation ('Dev set') Accuracy")
     print("-"*70)
-    accuracy = compute_accuracy(devY, devY_predict, devX)
+    accuracy = compute_and_print_accuracy(devY, devY_predict, devX)
 
     return 0
 
@@ -245,10 +249,12 @@ def nn_train(X, Y, params):
             # and true values of y, and the loss function returns a Variable
             # containing the loss.
             loss = loss_fn(y_pred, y)
-            if args.veryverbose or (t == params.trainsize/params.batchsize - 1):
+            batches_per_epoch = params.trainsize/params.batchsize
+            if args.veryverbose or (t == batches_per_epoch - 1):
                 eprint("Epoch:", epoch+1,
-                       "\tIteration: %2d" % (t+1),
-                       "\tMeanSquaredError =", loss.data[0])
+                       "\tBatch(size=%d): %d/%d" % \
+                          (params.batchsize, t+1, batches_per_epoch),
+                       "\tMeanSqError =", loss.data[0])
 
             # Backward pass: compute gradient of the loss with respect to all
             # the learnable parameters of the model. Internally, the parameters
@@ -281,19 +287,30 @@ def run_model(model, X):
                                    model["Ystd"])
     return Y_predict
 
-def compute_accuracy(Y, Ypred, X=None):
+def compute_and_print_accuracy(Y, Ypred, X=None, screen_output=True):
+    if screen_output or args.verbose:
+        sys.stderr.flush()
+        sys.stdout.flush()
     Y = np.reshape(np.asarray(Y), (-1, 1))
     Ypred = torch.round(Ypred).numpy()
     Ycorrect = (Y == Ypred)
     if args.verbose:
         eprint("shape of Ypred", Ypred.shape)
         eprint("shape of Y", Y.shape)
-        eprint("First 10 items: [predicted, actual, isCorrect]")
-        eprint(np.hstack((Ypred, Y, Ycorrect))[:10])
+        if args.veryverbose:
+            eprint("All items: [predicted, actual, isCorrect]")
+            eprint(np.hstack((Ypred, Y, Ycorrect)))
+        else:
+            eprint("First 10 items: [predicted, actual, isCorrect]")
+            eprint(np.hstack((Ypred, Y, Ycorrect))[:10])
+        sys.stderr.flush()
     test_correct = int(np.sum(Ycorrect))
     test_total = Ycorrect.shape[0]
-    print("%d correct out of %d (%2f %%)" %
-          (test_correct, test_total, float(test_correct)/test_total*100.0))
+    if screen_output:
+        print("%d correct out of %d (%2f %%)" %
+              (test_correct, test_total, float(test_correct)/test_total*100.0))
+    return (test_correct, test_total)
+
 
 ###############################################################################
 
