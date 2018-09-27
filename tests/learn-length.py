@@ -200,7 +200,7 @@ def nn_train(X, Y, params):
     # Initialize weights randomly
     def init_weights(m):
         if type(m) == torch.nn.Linear:
-            torch.nn.init.xavier_uniform(m.weight)
+            torch.nn.init.xavier_uniform_(m.weight)
             m.bias.data.fill_(0.01)
     nn_model.apply(init_weights)
 
@@ -223,11 +223,12 @@ def nn_train(X, Y, params):
     optimizer = torch.optim.SGD(nn_model.parameters(),
                                 lr = params.learnrate,
                                 momentum=0.9,
-                                weight_decay=1e-2)
+                                #weight_decay=1e-2
+                                )
 
     # The nn package also contains definitions of popular loss functions; in
     # this case we will use Mean Squared Error (MSE) as our loss function.
-    loss_fn = torch.nn.MSELoss(size_average=False)
+    loss_fn = torch.nn.MSELoss(reduction='sum')
 
     # Train the neural network
     for epoch in range(params.epochs):
@@ -254,7 +255,7 @@ def nn_train(X, Y, params):
                 eprint("Epoch:", epoch+1,
                        "\tBatch(size=%d): %d/%d" % \
                           (params.batchsize, t+1, batches_per_epoch),
-                       "\tMeanSqError =", loss.data[0])
+                       "\tMeanSqError =", loss.data.item())
 
             # Backward pass: compute gradient of the loss with respect to all
             # the learnable parameters of the model. Internally, the parameters
@@ -371,7 +372,7 @@ for t in range(3000000): #35000 steps??
     # values of y, and the loss function returns a Variable containing the
     # loss.
     loss = loss_fn(y_pred, y)
-    print("SGDIteration:", t, "\tMeanSquaredError =", loss.data[0])
+    print("SGDIteration:", t, "\tMeanSquaredError =", loss.data.item())
 
     # Zero the gradients before running the backward pass.
     #model.zero_grad()
