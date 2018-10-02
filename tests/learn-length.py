@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
-from sklearn import tree
-from sklearn.model_selection import cross_val_score
-from sklearn.ensemble import AdaBoostClassifier
+# from sklearn import tree
+# from sklearn.model_selection import cross_val_score
+# from sklearn.ensemble import AdaBoostClassifier
 import numpy as np
 import torch
 from torch.autograd import Variable
@@ -48,16 +48,18 @@ def main():
 """Sequence of units per layer, including input and
 output, where the last number (output) must be 1 and
 the first number is the number of input features.
-Example: 500 30 10 1""")
+Example: 500 30 20 1""")
     parser.add_argument('-b', '--batchsize', metavar='B', type=int,
                         default=500, help="batch size (default 500)")
     parser.add_argument('-e', '--epochs', metavar='E', type=int,
-                        default=100, help="number of epochs (default 100)")
+                        default=200, help="number of epochs (default 200)")
     parser.add_argument('-t', '--trainsize', metavar='M', type=int,
-                        default=3000,
-                        help="training data size (#examples, default 3000)")
+                        default=8000,
+                        help="training data size (#examples, default 8000)")
     parser.add_argument('-l', '--learnrate', metavar='L', type=float,
                         default=1e-5, help="learning rate (default 1e-5)")
+    parser.add_argument('-m', '--momentum', metavar='M', type=float,
+                        default=0.9, help="Nesterov momentum (default 0.9)")
     parser.add_argument('-v', '--verbose', action='store_true',
                         help="be more chatty on stderr")
     parser.add_argument('-V', '--veryverbose', action='store_true',
@@ -82,7 +84,7 @@ Example: 500 30 10 1""")
     # Split into training and dev sets
     if len(X) <= args.trainsize:
         eprint("Error: not enough data for %d training examples" %
-               args.trainsize)
+               args.trainsize, "(plus some dev examples)")
         return -1
     trainX = X[:args.trainsize]
     trainY = Y[:args.trainsize]
@@ -93,21 +95,23 @@ Example: 500 30 10 1""")
                (len(trainX), len(devX)))
 
     # Train a model
-    model = nn_train(trainX, trainY, args)
+    model = nn_train(args, trainX, trainY)
 
     # Run the model on the training set
     trainY_predict = run_model(model, trainX)
     print("-"*70)
     print("Test-on-Train Accuracy")
     print("-"*70)
-    accuracy = compute_and_print_accuracy(trainY, trainY_predict, trainX)
+    accuracy = compute_and_print_accuracy(trainY, trainY_predict, trainX,
+                                          screen_output=True)
 
     # Run the model on the dev set
     devY_predict = run_model(model, devX)
     print("-"*70)
     print("Hold-out Cross Validation ('Dev set') Accuracy")
     print("-"*70)
-    accuracy = compute_and_print_accuracy(devY, devY_predict, devX)
+    accuracy = compute_and_print_accuracy(devY, devY_predict, devX,
+                                          screen_output=True)
 
     return 0
 
@@ -164,7 +168,7 @@ def any_isnan(x):
     # use the fact that NaN != NaN
     return (x != x).any()
 
-def nn_train(X, Y, params):
+def nn_train(params, X, Y, devX=None, devY=None):
     """PyTorch: nn
 
     A fully-connected ReLU network with several hidden layers, trained to
@@ -176,6 +180,11 @@ def nn_train(X, Y, params):
     neural networks; this is where the nn package can help. The nn package
     defines a set of Modules, which you can think of as a neural network layer
     that has produces output from input and may have some trainable weights.
+
+    X = training inputs (n x #features)
+    Y = training outputs (n-long vector)
+    devX = development / hold-out-cross-validation X (n' x #features)
+    devY = development / hold-out-cross-validation Y (n'-long vector)
     """
     N = params.batchsize
     # input and output dimensions; the others are hidden dimensions
@@ -222,8 +231,8 @@ def nn_train(X, Y, params):
     # Set optimizer
     optimizer = torch.optim.SGD(nn_model.parameters(),
                                 lr = params.learnrate,
-                                momentum=0.9,
-                                #weight_decay=1e-2
+                                momentum=params.momentum, # Nesterov momentum
+                                #weight_decay=1e-2 # L2 regularization
                                 )
 
     # The nn package also contains definitions of popular loss functions; in
@@ -288,29 +297,47 @@ def run_model(model, X):
                                    model["Ystd"])
     return Y_predict
 
-def compute_and_print_accuracy(Y, Ypred, X=None, screen_output=True):
+def compute_and_print_accuracy(Y, Ypred, X=None, screen_output=False):
     if screen_output or args.verbose:
         sys.stderr.flush()
         sys.stdout.flush()
-    Y = np.reshape(np.asarray(Y), (-1, 1))
-    Ypred = torch.round(Ypred).numpy()
-    Ycorrect = (Y == Ypred)
-    if args.verbose:
+    Y = np.reshape(np.asarray(Y, dtype=np.int32), (-1, 1))
+    Ypred = torch.round(Ypred).numpy().astype(np.int32)
+    Ycorrect = (Y == Ypred).flatten()
+    Yincorrect = ~Ycorrect
+    num_incorrect = int(np.sum(Yincorrect))
+    if args.veryverbose:
         eprint("shape of Ypred", Ypred.shape)
         eprint("shape of Y", Y.shape)
-        if args.veryverbose:
-            eprint("All items: [predicted, actual, isCorrect]")
-            eprint(np.hstack((Ypred, Y, Ycorrect)))
-        else:
-            eprint("First 10 items: [predicted, actual, isCorrect]")
-            eprint(np.hstack((Ypred, Y, Ycorrect))[:10])
+        eprint("shape of Y[Yincorrect]:", Y[Yincorrect].shape)
         sys.stderr.flush()
+
+    # display mistakes
+    NUM_MISTAKES_DSP = 10 # number to display
+    NUM_X_FEATURES = 12 # number to display
+    if args.verbose and num_incorrect > 0:
+        if X is not None:
+            X = np.asarray(X, dtype=np.int32)
+            x_column_labels = ", X[0],...,X[%d]" % (NUM_X_FEATURES - 1)
+            result_stack = np.hstack((Ypred, Y, X[:,:NUM_X_FEATURES]))
+            mistake_stack = result_stack[Yincorrect][:NUM_MISTAKES_DSP]
+        else:
+            x_column_labels = ""
+            result_stack = np.hstack((Ypred, Y))
+            mistake_stack = result_stack[Yincorrect][:NUM_MISTAKES_DSP]
+
+        eprint("First %d mistakes: [predicted, actual%s]" %
+               (mistake_stack.shape[0], x_column_labels))
+        eprint(mistake_stack)
+        sys.stderr.flush()
+
+    # compute accuracy
     test_correct = int(np.sum(Ycorrect))
-    test_total = Ycorrect.shape[0]
+    test_total = len(Ycorrect)
     if screen_output:
         print("%d correct out of %d (%2f %%)" %
               (test_correct, test_total, float(test_correct)/test_total*100.0))
-    return (test_correct, test_total)
+    return (test_correct, test_total, Y, Ypred, Ycorrect)
 
 
 ###############################################################################
