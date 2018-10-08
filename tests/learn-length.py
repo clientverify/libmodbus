@@ -37,6 +37,14 @@ x = Sequence of bytes of a packet, as an L-dimensional feature vector
     truncate.
 
 y = Length of x before padding or truncation.
+
+Input file example (modbus bytes enclosed in square braces, 1 datagram/line):
+[00][01][00][00][00][08][FF][0F][00][2E][00][06][01][20]
+[00][02][00][00][00][0C][FF][0F][00][39][00][23][05][49][8A][A5][71][06]
+...
+
+By default, this data is read from stdin. Alternatively, -i can be used to read
+from a file instead.
 """
 
 def main():
@@ -62,14 +70,17 @@ Example: 500 30 20 1""")
                         default=1e-5, help="learning rate (default 1e-5)")
     parser.add_argument('-m', '--momentum', metavar='M', type=float,
                         default=0.9, help="Nesterov momentum (default 0.9)")
-    parser.add_argument('-o', '--output', metavar='F', type=str,
-                        default=None, help="output CSV file of training stats")
-    parser.add_argument('-p', '--predicts', metavar='F', type=str,
-                        default=None, help="output predicted-vs-actuals CSV file")
+    parser.add_argument('-i', '--input', metavar='F', type=str,
+                        default=None, help="input file rather than stdin")
+    parser.add_argument('-o', '--outdir', metavar='D', type=str,
+                        default=None,
+                        help="output directory for stats and hyperparameters")
+    parser.add_argument('-I', '--expID', metavar='n', type=int, default=0,
+                        help="experiment ID (integer, default=0)")
+    parser.add_argument('-s', '--extrastats', action='store_true',
+                        help="record extra statistics (accuracy every epoch)")
     parser.add_argument('-v', '--verbose', action='store_true',
                         help="be more chatty on stderr")
-    parser.add_argument('-V', '--veryverbose', action='store_true',
-                        help="be extremely chatty, show MSE every iteration")
     args = parser.parse_args()
 
     INPUT_FEATURES = args.layersizes[0] # input dimension
@@ -81,11 +92,19 @@ Example: 500 30 20 1""")
        args.trainsize % args.batchsize != 0:
         parser.error("Batch size (%d) must divide training data size (%d)" %
                      (args.batchsize, args.trainsize))
-    if args.veryverbose: # veryverbose implies verbose
-        args.verbose = True
+    # Print args
+    if args.verbose:
+        eprint("Running NN training with the following parameters:")
+        eprint("-"*78)
+        eprint("args =", args)
+        eprint("-"*78)
 
     # Read input
-    X, Y = read_packet_lines(sys.stdin, INPUT_FEATURES)
+    if args.input is not None:
+        inputfp = open(args.input, "r")
+    else:
+        inputfp = sys.stdin
+    X, Y = read_packet_lines(inputfp, INPUT_FEATURES)
 
     # Split into training and dev sets
     if len(X) <= args.trainsize:
@@ -101,23 +120,23 @@ Example: 500 30 20 1""")
                (len(trainX), len(devX)))
 
     # Train a model
-    model = nn_train(args, trainX, trainY)
+    model = nn_train(args, trainX, trainY, devX, devY)
 
     # Run the model on the training set
     trainY_predict = run_model(model, trainX)
-    print("-"*70)
-    print("Test-on-Train Accuracy")
-    print("-"*70)
-    accuracy = compute_and_print_accuracy(trainY, trainY_predict, trainX,
-                                          screen_output=True)
+    print("-"*78)
+    print("Test-on-Train Accuracy: ", end="")
+    trainAccuracy = compute_accuracy(trainY, trainY_predict, trainX,
+                                     screen_output=True)
 
     # Run the model on the dev set
     devY_predict = run_model(model, devX)
-    print("-"*70)
-    print("Hold-out Cross Validation ('Dev set') Accuracy")
-    print("-"*70)
-    accuracy = compute_and_print_accuracy(devY, devY_predict, devX,
-                                          screen_output=True)
+    print("-"*78)
+    print("Hold-out Cross Validation Accuracy: ", end="")
+    devAccuracy = compute_accuracy(devY, devY_predict, devX,
+                                   screen_output=True)
+
+    # TODO: Write to output to directory if requested.
 
     return 0
 
@@ -238,6 +257,14 @@ def nn_train(params, X, Y, devX=None, devY=None):
         eprint("Y type and shape:", type(Ynorm), str(Ynorm.shape))
         eprint("Batch size:", N)
 
+
+    # Prepare tensor versions of train and dev sets
+    trainX = torch.FloatTensor(X)
+    trainY = torch.FloatTensor(Y).unsqueeze(1)
+    if devX is not None and devY is not None:
+        devX = torch.FloatTensor(devX)
+        devY = torch.FloatTensor(devY).unsqueeze(1)
+
     # Set optimizer
     optimizer = torch.optim.SGD(nn_model.parameters(),
                                 lr = params.learnrate,
@@ -249,9 +276,26 @@ def nn_train(params, X, Y, devX=None, devY=None):
     # this case we will use Mean Squared Error (MSE) as our loss function.
     loss_fn = torch.nn.MSELoss(reduction='sum')
 
+    # Get ready to collect statistics:
+    # [[epoch, batch, loss, trainAccuracy, devAccuracy],
+    #  [epoch, batch, loss, trainAccuracy, devAccuracy],
+    #  ...
+    #  [epoch, batch, loss, trainAccuracy, devAccuracy]]
+    # Note that epoch and batch are 1-indexed when we record statistics
+    stats = []
+
+    # Gather parts of model to be trained
+    model = {}
+    model["nn_model"] = nn_model
+    model["Xmean"] = Xmean
+    model["Xstd"] = Xstd
+    model["Ymean"] = Ymean
+    model["Ystd"] = Ystd
+    model["params"] = params
+
     # Train the neural network
     for epoch in range(params.epochs):
-        for t, (Xbatch, Ybatch) in enumerate(training_loader):
+        for batch, (Xbatch, Ybatch) in enumerate(training_loader):
             optimizer.zero_grad()
 
             # Wrap batch of training data in Variables
@@ -269,12 +313,7 @@ def nn_train(params, X, Y, devX=None, devY=None):
             # and true values of y, and the loss function returns a Variable
             # containing the loss.
             loss = loss_fn(y_pred, y)
-            batches_per_epoch = params.trainsize/params.batchsize
-            if args.veryverbose or (t == batches_per_epoch - 1):
-                eprint("Epoch:", epoch+1,
-                       "\tBatch(size=%d): %d/%d" % \
-                          (params.batchsize, t+1, batches_per_epoch),
-                       "\tMeanSqError =", loss.data.item())
+            last_loss = loss.data.item()
 
             # Backward pass: compute gradient of the loss with respect to all
             # the learnable parameters of the model. Internally, the parameters
@@ -286,14 +325,43 @@ def nn_train(params, X, Y, devX=None, devY=None):
             # Update the weights using gradient descent.
             optimizer.step()
 
-    # Collect the trained model and return it
-    model = {}
-    model["nn_model"] = nn_model
-    model["Xmean"] = Xmean
-    model["Xstd"] = Xstd
-    model["Ymean"] = Ymean
-    model["Ystd"] = Ystd
-    #model["stats"] = statsdf
+            # Collect statistics on loss
+            stats_line = [epoch + 1, batch + 1, last_loss]
+            batches_per_epoch = params.trainsize/params.batchsize
+            last_batch = batches_per_epoch - 1
+            if params.extrastats or (batch == last_batch):
+                # optionally, test-on-train accuracy
+                trainYpred = run_model(model, trainX)
+                train_accuracy = compute_accuracy(trainY, trainYpred)
+                correct = train_accuracy[0]
+                total = train_accuracy[1]
+                stats_line.append(correct/total)
+                if devX is not None and devY is not None:
+                    # optionally, dev accuracy (hold-out cross-validation)
+                    devYpred = run_model(model, devX)
+                    dev_accuracy = compute_accuracy(devY, devYpred)
+                    correct = dev_accuracy[0]
+                    total = dev_accuracy[1]
+                    stats_line.append(correct/total)
+                # Display
+                eprint("Epoch: %4d" % (epoch+1),
+                       "Batch(sz=%d): %2d/%d" % \
+                          (params.batchsize, batch+1, batches_per_epoch),
+                       " MSE = %.3e" % last_loss, end="")
+                if len(stats_line) >= 4:
+                    eprint(" trainAcc = %.2f%%" % (stats_line[3]*100.0), end="")
+                if len(stats_line) >= 5:
+                    eprint(" devAcc = %.2f%%" % (stats_line[4]*100.0), end="")
+                eprint("") # newline
+            # add stats line to the record
+            stats.append(stats_line)
+
+    # Convert training stats into dataframe and return it with the model.
+    # Missing data (i.e., train/dev accuracy for intermediate batches) is
+    # represented by a NaN in the data frame.
+    col_headers = pd.Series(["Epoch", "Batch", "MSE", "trainAcc", "devAcc"])
+    statsdf = pd.DataFrame(stats, columns=col_headers)
+    model["stats"] = statsdf
 
     return model
 
@@ -308,7 +376,7 @@ def run_model(model, X):
                                    model["Ystd"])
     return Y_predict
 
-def compute_and_print_accuracy(Y, Ypred, X=None, screen_output=False):
+def compute_accuracy(Y, Ypred, X=None, screen_output=False):
     if screen_output or args.verbose:
         sys.stderr.flush()
         sys.stdout.flush()
@@ -317,16 +385,18 @@ def compute_and_print_accuracy(Y, Ypred, X=None, screen_output=False):
     Ycorrect = (Y == Ypred).flatten()
     Yincorrect = ~Ycorrect
     num_incorrect = int(np.sum(Yincorrect))
-    if args.veryverbose:
-        eprint("shape of Ypred", Ypred.shape)
-        eprint("shape of Y", Y.shape)
-        eprint("shape of Y[Yincorrect]:", Y[Yincorrect].shape)
-        sys.stderr.flush()
+
+    # compute accuracy
+    test_correct = int(np.sum(Ycorrect))
+    test_total = len(Ycorrect)
+    if screen_output:
+        print("%d correct out of %d (%2f %%)" %
+              (test_correct, test_total, float(test_correct)/test_total*100.0))
 
     # display mistakes
     NUM_MISTAKES_DSP = 10 # number to display
     NUM_X_FEATURES = 12 # number to display
-    if args.verbose and num_incorrect > 0:
+    if screen_output and args.verbose and num_incorrect > 0:
         if X is not None:
             X = np.asarray(X, dtype=np.int32)
             x_column_labels = ", X[0],...,X[%d]" % (NUM_X_FEATURES - 1)
@@ -342,12 +412,6 @@ def compute_and_print_accuracy(Y, Ypred, X=None, screen_output=False):
         eprint(mistake_stack)
         sys.stderr.flush()
 
-    # compute accuracy
-    test_correct = int(np.sum(Ycorrect))
-    test_total = len(Ycorrect)
-    if screen_output:
-        print("%d correct out of %d (%2f %%)" %
-              (test_correct, test_total, float(test_correct)/test_total*100.0))
     return (test_correct, test_total, Y, Ypred, Ycorrect)
 
 
