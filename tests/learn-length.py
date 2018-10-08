@@ -13,6 +13,8 @@ import os
 import time
 import argparse
 from collections import OrderedDict
+import pandas as pd
+import random
 
 np.set_printoptions(threshold=np.nan)
 
@@ -60,6 +62,10 @@ Example: 500 30 20 1""")
                         default=1e-5, help="learning rate (default 1e-5)")
     parser.add_argument('-m', '--momentum', metavar='M', type=float,
                         default=0.9, help="Nesterov momentum (default 0.9)")
+    parser.add_argument('-o', '--output', metavar='F', type=str,
+                        default=None, help="output CSV file of training stats")
+    parser.add_argument('-p', '--predicts', metavar='F', type=str,
+                        default=None, help="output predicted-vs-actuals CSV file")
     parser.add_argument('-v', '--verbose', action='store_true',
                         help="be more chatty on stderr")
     parser.add_argument('-V', '--veryverbose', action='store_true',
@@ -115,6 +121,10 @@ Example: 500 30 20 1""")
 
     return 0
 
+def make_rand_bytes(n):
+    # the following is faster than os.urandom(n) and can be manually seeded
+    return random.getrandbits(8*n).to_bytes(n, sys.byteorder)
+
 def pad_or_truncate(some_list, target_len, rand_pad=True):
     if len(some_list) >= target_len:
         return some_list[:target_len]
@@ -122,7 +132,7 @@ def pad_or_truncate(some_list, target_len, rand_pad=True):
         pad_len = target_len - len(some_list)
         new_list = some_list[:]
         if rand_pad:
-            new_list.extend(os.urandom(pad_len))
+            new_list.extend(make_rand_bytes(pad_len))
         else:
             new_list.extend([0] * pad_len)
         return new_list
@@ -283,6 +293,7 @@ def nn_train(params, X, Y, devX=None, devY=None):
     model["Xstd"] = Xstd
     model["Ymean"] = Ymean
     model["Ystd"] = Ystd
+    #model["stats"] = statsdf
 
     return model
 
