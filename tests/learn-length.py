@@ -1,20 +1,13 @@
 #!/usr/bin/env python
 
-# from sklearn import tree
-# from sklearn.model_selection import cross_val_score
-# from sklearn.ensemble import AdaBoostClassifier
 import numpy as np
 import torch
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from torch.utils.data import TensorDataset
-import sys
-import os
-import time
-import argparse
+import sys, os, time, argparse, random
 from collections import OrderedDict
 import pandas as pd
-import random
 
 np.set_printoptions(threshold=np.nan)
 
@@ -65,7 +58,10 @@ Example: 500 30 20 1""")
                         default=200, help="number of epochs (default 200)")
     parser.add_argument('-t', '--trainsize', metavar='M', type=int,
                         default=8000,
-                        help="training data size (#examples, default 8000)")
+                        help="training set size (#examples, default 8000)")
+    parser.add_argument('-d', '--devsize', metavar='M', type=int,
+                        default=None,
+                        help="dev set size (#examples, default: the rest)")
     parser.add_argument('-l', '--learnrate', metavar='L', type=float,
                         default=1e-5, help="learning rate (default 1e-5)")
     parser.add_argument('-m', '--momentum', metavar='M', type=float,
@@ -107,14 +103,21 @@ Example: 500 30 20 1""")
     X, Y = read_packet_lines(inputfp, INPUT_FEATURES)
 
     # Split into training and dev sets
-    if len(X) <= args.trainsize:
-        eprint("Error: not enough data for %d training examples" %
-               args.trainsize, "(plus some dev examples)")
+    if args.devsize is None:
+        args.devsize = len(X) - args.trainsize
+        if args.trainsize < 0:
+            eprint("Error: not enough data for %d training examples" %
+                   args.trainsize, "(plus some dev examples)")
+            return -1
+    elif args.trainsize + args.devsize > len(X):
+        eprint("Error: not enough data for %d training and %d dev examples" %
+               (args.trainsize, args.devsize))
         return -1
+
     trainX = X[:args.trainsize]
     trainY = Y[:args.trainsize]
-    devX = X[args.trainsize:]
-    devY = Y[args.trainsize:]
+    devX = X[args.trainsize:(args.trainsize + args.devsize)]
+    devY = Y[args.trainsize:(args.trainsize + args.devsize)]
     if args.verbose:
         eprint("Data split into %d training and %d dev examples" %
                (len(trainX), len(devX)))
@@ -136,7 +139,9 @@ Example: 500 30 20 1""")
     devAccuracy = compute_accuracy(devY, devY_predict, devX,
                                    screen_output=True)
 
-    # TODO: Write to output to directory if requested.
+    # Write output to directory if requested
+    if args.outdir is not None:
+        write_output_dir(args.outdir, model, trainAccuracy, devAccuracy)
 
     return 0
 
@@ -333,15 +338,15 @@ def nn_train(params, X, Y, devX=None, devY=None):
                 # optionally, test-on-train accuracy
                 trainYpred = run_model(model, trainX)
                 train_accuracy = compute_accuracy(trainY, trainYpred)
-                correct = train_accuracy[0]
-                total = train_accuracy[1]
+                correct = train_accuracy["numcorrect"]
+                total = train_accuracy["numtotal"]
                 stats_line.append(correct/total)
                 if devX is not None and devY is not None:
                     # optionally, dev accuracy (hold-out cross-validation)
                     devYpred = run_model(model, devX)
                     dev_accuracy = compute_accuracy(devY, devYpred)
-                    correct = dev_accuracy[0]
-                    total = dev_accuracy[1]
+                    correct = dev_accuracy["numcorrect"]
+                    total = dev_accuracy["numtotal"]
                     stats_line.append(correct/total)
                 # Display
                 eprint("Epoch: %4d" % (epoch+1),
@@ -365,6 +370,83 @@ def nn_train(params, X, Y, devX=None, devY=None):
 
     return model
 
+def write_output_dir(outdir, model, trainAcc, devAcc):
+    """Write training statistics, hyperparameters, and predictions to separate CSV
+    files in the designated output directory.
+    """
+
+    # Create directory if it doesn't yet exist. Then prepare filenames.
+    os.makedirs(outdir, exist_ok=True)
+    training_filename = outdir + os.sep + "training_stats.csv"
+    hyperparams_filename = outdir + os.sep + "hyperparams.csv"
+    predictions_filename = outdir + os.sep + "predictions.csv"
+
+    # Get experiment ID (add as the first column to each of the data frames)
+    expID = model["params"].expID
+
+    # Prepare and write training stats
+    statsdf = model["stats"].copy()
+    statsdf.insert(0, "expID", expID)
+    append_df_to_csv(statsdf, training_filename)
+    if args.verbose:
+        eprint("Wrote %d stats lines to %s" % (len(statsdf), training_filename))
+
+    # Prepare and write hyperparameters
+    paramsdf = organize_hyperparams(model["params"])
+    append_df_to_csv(paramsdf, hyperparams_filename)
+    if args.verbose:
+        eprint("Wrote %d lines to %s" % (len(paramsdf), hyperparams_filename))
+
+    # Prepare and write predictions
+    traindf = organize_accuracy(trainAcc, "train")
+    devdf = organize_accuracy(devAcc, "dev")
+    bothdf = pd.concat([traindf, devdf], ignore_index=True)
+    dataID = pd.Series(range(len(traindf) + len(devdf)), dtype="int64")
+    bothdf.insert(0, "dataID", dataID)
+    bothdf.insert(0, "expID", expID)
+    append_df_to_csv(bothdf, predictions_filename)
+    if args.verbose:
+        eprint("Wrote %d lines to %s" % (len(bothdf), predictions_filename))
+
+    return
+
+def append_df_to_csv(df, filename):
+    # If creating a new file, need a column header line.
+    need_header = not os.path.isfile(filename)
+    with open(filename, 'a') as f:
+        df.to_csv(f, header=need_header, index=False)
+
+def organize_hyperparams(params):
+    """Return dataframe with parameters organized"""
+
+    # Split layer sizes into separate columns.
+    MAX_LAYERS = 4
+    assert len(params.layersizes) <= MAX_LAYERS
+    paramdict = params.__dict__.copy()
+    L = paramdict.pop("layersizes")
+    if len(L) < MAX_LAYERS:
+        L += [np.nan] * (MAX_LAYERS - len(L))
+    for i in range(MAX_LAYERS):
+        col_name = "layer" + str(i)
+        paramdict[col_name] = L[i]
+
+    # Return a data frame with the columns sorted alphabetically.
+    paramdf = pd.DataFrame.from_dict({k:[v] for k,v in paramdict.items()})
+    paramdf = paramdf.reindex(columns=sorted(paramdf.columns))
+    return paramdf
+
+def organize_accuracy(acc, datasetlabel):
+    assert datasetlabel in ("train", "dev")
+    col_labels = [datasetlabel, "Ypred", "Y", "Ycorrect"]
+    accdf = pd.DataFrame({"dataset": datasetlabel,
+                          "Ypred": acc["Ypred"].flatten(),
+                          "Y": acc["Y"].flatten(),
+                          "Ycorrect": acc["Ycorrect"].flatten()})
+
+    from pandas.api.types import CategoricalDtype
+    cat_type = CategoricalDtype(categories=["train", "dev"], ordered=True)
+    accdf["dataset"] = accdf["dataset"].astype(cat_type)
+    return accdf
 
 def run_model(model, X):
     X = torch.FloatTensor(X)
@@ -412,7 +494,15 @@ def compute_accuracy(Y, Ypred, X=None, screen_output=False):
         eprint(mistake_stack)
         sys.stderr.flush()
 
-    return (test_correct, test_total, Y, Ypred, Ycorrect)
+    # Collect results
+    results = {}
+    results["numcorrect"] = test_correct
+    results["numtotal"] = test_total
+    results["Y"] = Y
+    results["Ypred"] = Ypred
+    results["Ycorrect"] = Ycorrect
+
+    return results
 
 
 ###############################################################################
@@ -424,6 +514,10 @@ if __name__ == "__main__":
 ###############################################################################
 
 # Old decision tree classifier stuff
+
+# from sklearn import tree
+# from sklearn.model_selection import cross_val_score
+# from sklearn.ensemble import AdaBoostClassifier
 
 # >>> from sklearn import tree
 # >>> X = [[0, 0], [1, 1]]
