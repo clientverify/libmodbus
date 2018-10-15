@@ -74,7 +74,7 @@ Example: 500 30 20 1""")
     parser.add_argument('-I', '--expID', metavar='n', type=int, default=0,
                         help="experiment ID (integer, default=0)")
     parser.add_argument('-s', '--extrastats', action='store_true',
-                        help="record extra statistics (accuracy every epoch)")
+                        help="record extra statistics (accuracy every batch)")
     parser.add_argument('-v', '--verbose', action='store_true',
                         help="be more chatty on stderr")
     args = parser.parse_args()
