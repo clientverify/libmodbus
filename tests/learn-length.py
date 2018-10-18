@@ -8,6 +8,9 @@ from torch.utils.data import TensorDataset
 import sys, os, time, argparse, random
 from collections import OrderedDict
 import pandas as pd
+import re
+import bz2
+import gzip
 
 np.set_printoptions(threshold=np.nan)
 
@@ -37,7 +40,10 @@ Input file example (modbus bytes enclosed in square braces, 1 datagram/line):
 ...
 
 By default, this data is read from stdin. Alternatively, -i can be used to read
-from a file instead.
+from a file instead, where the file extension may be .gz or .bz2, indicating
+gzip or bzip2 compression, respectively. The input format also need not use
+square brackets such as "[FF]"; the parser simply expects a sequence of
+hex-encoded bytes separated by non-alphanumeric delimiters.
 """
 
 def main():
@@ -67,7 +73,8 @@ Example: 500 30 20 1""")
     parser.add_argument('-m', '--momentum', metavar='M', type=float,
                         default=0.9, help="Nesterov momentum (default 0.9)")
     parser.add_argument('-i', '--input', metavar='F', type=str,
-                        default=None, help="input file rather than stdin")
+                        default=None,
+                        help="input file rather than stdin (handles *.gz/.bz2)")
     parser.add_argument('-o', '--outdir', metavar='D', type=str,
                         default=None,
                         help="output directory for stats and hyperparameters")
@@ -97,7 +104,12 @@ Example: 500 30 20 1""")
 
     # Read input
     if args.input is not None:
-        inputfp = open(args.input, "r")
+        if args.input.endswith(".gz"):
+            inputfp = gzip.open(args.input, mode='rt')
+        elif args.input.endswith(".bz2"):
+            inputfp = bz2.open(args.input, mode='rt')
+        else:
+            inputfp = open(args.input, "r")
     else:
         inputfp = sys.stdin
     X, Y = read_packet_lines(inputfp, INPUT_FEATURES)
@@ -169,7 +181,8 @@ def read_packet_lines(f, num_features):
     raw_data = []
     raw_lengths = []
     for line in f:
-        fields = line.strip().strip("[").strip("]").split("][")
+        # ignore non-alphanumeric characters like "[" and "]"
+        fields = re.sub(r'\W', " ", line).split()
         intfields = [int(x,16) for x in fields]
         raw_lengths.append(len(intfields))
         raw_data.append(pad_or_truncate(intfields, num_features))
