@@ -4,15 +4,12 @@ import random
 import sys
 
 # Random driver for the generic-client program
-# Usage: ./generic-client [serverIP [port]]
-# Generic modbus client controlled by text requests.
-
-#   -r, --record F       record network activity in ktest file F
-#   -p, --playback F     play network activity from ktest file F
-#   -R, --random         choose random modbus messages to send
-#   -s, --selftest       run self-test and exit
-#   -v, --verbose        be more chatty on stderr
-#   -h, --help           display this message and exit
+# Usage:
+#
+#  $ ./generic-random.py numpackets ADDRESS_END | \
+#        ./generic-client -v [serverIP [port]] | \
+#        grep '\[' > randdata.txt
+#  $ cat randdata.txt | ./learn-length.py
 
 # Request syntax:
 
