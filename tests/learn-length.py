@@ -311,6 +311,8 @@ def nn_train(params, X, Y, devX=None, devY=None):
     model["Ystd"] = Ystd
     model["params"] = params
 
+    ts_begin = pd.Timestamp.now()
+
     # Train the neural network
     for epoch in range(params.epochs):
         for batch, (Xbatch, Ybatch) in enumerate(training_loader):
@@ -344,7 +346,11 @@ def nn_train(params, X, Y, devX=None, devY=None):
             optimizer.step()
 
             # Collect statistics on loss
-            stats_line = [epoch + 1, batch + 1, last_loss]
+            elapsed_time = (pd.Timestamp.now() - ts_begin).total_seconds()
+            stats_line = [elapsed_time,
+                          epoch + 1,
+                          batch + 1,
+                          last_loss]
             batches_per_epoch = params.trainsize/params.batchsize
             last_batch = batches_per_epoch - 1
             if params.extrastats or (batch == last_batch):
@@ -362,22 +368,28 @@ def nn_train(params, X, Y, devX=None, devY=None):
                     total = dev_accuracy["numtotal"]
                     stats_line.append(correct/total)
                 # Display
-                eprint("Epoch: %4d" % (epoch+1),
-                       "Batch(sz=%d): %2d/%d" % \
+                eprint("Epoch=%4d" % (epoch+1),
+                       "T(s)=%5.2f" % elapsed_time,
+                       "Batch|%d|%2d/%d" % \
                           (params.batchsize, batch+1, batches_per_epoch),
-                       " MSE = %.3e" % last_loss, end="")
-                if len(stats_line) >= 4:
-                    eprint(" trainAcc = %.2f%%" % (stats_line[3]*100.0), end="")
+                       " MSE= %.3e" % last_loss, end="")
                 if len(stats_line) >= 5:
-                    eprint(" devAcc = %.2f%%" % (stats_line[4]*100.0), end="")
+                    eprint(" trainAcc= %.2f%%" % (stats_line[4]*100.0), end="")
+                if len(stats_line) >= 6:
+                    eprint(" devAcc= %.2f%%" % (stats_line[5]*100.0), end="")
                 eprint("") # newline
-            # add stats line to the record
-            stats.append(stats_line)
+                # add stats line to the record
+                stats.append(stats_line)
 
     # Convert training stats into dataframe and return it with the model.
     # Missing data (i.e., train/dev accuracy for intermediate batches) is
     # represented by a NaN in the data frame.
-    col_headers = pd.Series(["Epoch", "Batch", "MSE", "trainAcc", "devAcc"])
+    col_headers = pd.Series(["Timestamp",
+                             "Epoch",
+                             "Batch",
+                             "MSE",
+                             "trainAcc",
+                             "devAcc"])
     statsdf = pd.DataFrame(stats, columns=col_headers)
     model["stats"] = statsdf
 
