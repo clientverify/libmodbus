@@ -72,6 +72,10 @@ Example: 500 30 20 1""")
                         default=1e-5, help="learning rate (default 1e-5)")
     parser.add_argument('-m', '--momentum', metavar='M', type=float,
                         default=0.9, help="Nesterov momentum (default 0.9)")
+    parser.add_argument('-Q', '--quickexit', metavar='N', type=int,
+                        default=None,
+                        help="stop training if dev/train accuracy " + \
+                        "is unchanged for N epochs")
     parser.add_argument('-i', '--input', metavar='F', type=str,
                         default=None,
                         help="input file rather than stdin (handles *.gz/.bz2)")
@@ -312,6 +316,9 @@ def nn_train(params, X, Y, devX=None, devY=None):
     model["params"] = params
 
     ts_begin = pd.Timestamp.now()
+    train_Ycorrect_prev = None # correct/incorrect vector after previous epoch
+    dev_Ycorrect_prev = None   # correct/incorrect vector after previous epoch
+    Ycorrect_epochs_unchanged = 0
 
     # Train the neural network
     for epoch in range(params.epochs):
@@ -359,6 +366,7 @@ def nn_train(params, X, Y, devX=None, devY=None):
                 train_accuracy = compute_accuracy(trainY, trainYpred)
                 correct = train_accuracy["numcorrect"]
                 total = train_accuracy["numtotal"]
+                train_Ycorrect = train_accuracy["Ycorrect"]
                 stats_line.append(correct/total)
                 if devX is not None and devY is not None:
                     # optionally, dev accuracy (hold-out cross-validation)
@@ -366,6 +374,7 @@ def nn_train(params, X, Y, devX=None, devY=None):
                     dev_accuracy = compute_accuracy(devY, devYpred)
                     correct = dev_accuracy["numcorrect"]
                     total = dev_accuracy["numtotal"]
+                    dev_Ycorrect = dev_accuracy["Ycorrect"]
                     stats_line.append(correct/total)
                 # Display
                 eprint("Epoch=%4d" % (epoch+1),
@@ -380,6 +389,19 @@ def nn_train(params, X, Y, devX=None, devY=None):
                 eprint("") # newline
                 # add stats line to the record
                 stats.append(stats_line)
+        # Quick exit if train & dev correct/incorrect vectors have seen no
+        # change for a given number of epochs.
+        if np.array_equal(train_Ycorrect_prev, train_Ycorrect) and \
+           np.array_equal(dev_Ycorrect_prev, dev_Ycorrect):
+            Ycorrect_epochs_unchanged += 1
+        else:
+            Ycorrect_epochs_unchanged = 0
+        train_Ycorrect_prev = train_Ycorrect
+        dev_Ycorrect_prev = dev_Ycorrect
+        if Ycorrect_epochs_unchanged == params.quickexit:
+            eprint("Train/dev accuracy unchanged for %d epochs; early exit." %
+                   params.quickexit)
+            break
 
     # Convert training stats into dataframe and return it with the model.
     # Missing data (i.e., train/dev accuracy for intermediate batches) is

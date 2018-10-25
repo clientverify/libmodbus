@@ -25,11 +25,13 @@ hpranges["learnrate"] = {"type":"log",
                          "min": 1e-6, "max":1e-3}
 hpranges["momentum"] = {"type":"1-log",
                         "min": 0, "max": 0.99}
+hpranges["quickexit"] = {"type":"set", "set":[50]}
 hpranges["hiddenLayers"] = {"type":"set", "set":[1,2]}
 hpranges["unitsPerLayer"] = {"type":"log", "round":"int",
                              "min": 2, "max": 50}
 hpranges["firstLayer"] = {"type":"set", "set":[50, 500]}
 hpranges["lastLayer"] = {"type":"set", "set":[1]}
+
 
 def sampleParamDistribution(paramrange):
 
@@ -123,6 +125,7 @@ def run_training(hyperparams, inputfile, outdir, expID=0, verbose=False):
     cmdline.extend(["-d", str(hyperparams["devsize"])])
     cmdline.extend(["-l", str(hyperparams["learnrate"])])
     cmdline.extend(["-m", str(hyperparams["momentum"])])
+    cmdline.extend(["-Q", str(hyperparams["quickexit"])])
     cmdline.extend(["-i", inputfile])
     cmdline.extend(["-o", outdir])
     cmdline.extend([str(x) for x in hyperparams["layersizes"]])
