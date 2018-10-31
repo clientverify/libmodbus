@@ -26,7 +26,8 @@ hpranges["learnrate"] = {"type":"log",
 hpranges["momentum"] = {"type":"1-log",
                         "min": 0, "max": 0.99}
 hpranges["quickexit"] = {"type":"set", "set":[50]}
-hpranges["hiddenLayers"] = {"type":"set", "set":[1,2]}
+hpranges["unstable"] = {"type":"set", "set":[20]}
+hpranges["hiddenLayers"] = {"type":"set", "set":[0,1,2]}
 hpranges["unitsPerLayer"] = {"type":"log", "round":"int",
                              "min": 2, "max": 50}
 hpranges["firstLayer"] = {"type":"set", "set":[50, 500]}
@@ -126,11 +127,13 @@ def run_training(hyperparams, inputfile, outdir, expID=0, verbose=False):
     cmdline.extend(["-l", str(hyperparams["learnrate"])])
     cmdline.extend(["-m", str(hyperparams["momentum"])])
     cmdline.extend(["-Q", str(hyperparams["quickexit"])])
+    cmdline.extend(["-U", str(hyperparams["unstable"])])
     cmdline.extend(["-i", inputfile])
     cmdline.extend(["-o", outdir])
     cmdline.extend([str(x) for x in hyperparams["layersizes"]])
     if verbose:
         eprint("command:", " ".join(cmdline))
+        sys.stderr.flush()
     subprocess.run(cmdline)
 
 def main():
