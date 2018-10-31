@@ -92,6 +92,8 @@ Example: 500 30 20 1""")
                         help="experiment ID (integer, default=0)")
     parser.add_argument('-s', '--extrastats', action='store_true',
                         help="record extra statistics (accuracy every batch)")
+    parser.add_argument('-z', '--zeropad', action='store_true',
+                        help="instead of padding input randomly, pad with 0x00")
     parser.add_argument('-v', '--verbose', action='store_true',
                         help="be more chatty on stderr")
     args = parser.parse_args()
@@ -125,10 +127,11 @@ Example: 500 30 20 1""")
             inputfp = open(args.input, "r")
     else:
         inputfp = sys.stdin
+    rand_pad = not args.zeropad
     if args.yprepend:
-        X, Y = read_packet_lines_yprepend(inputfp, INPUT_FEATURES)
+        X, Y = read_packet_lines_yprepend(inputfp, INPUT_FEATURES, rand_pad)
     else:
-        X, Y = read_packet_lines(inputfp, INPUT_FEATURES)
+        X, Y = read_packet_lines(inputfp, INPUT_FEATURES, rand_pad)
 
     # Split into training and dev sets
     if args.devsize is None:
@@ -199,7 +202,7 @@ def pad_or_truncate(some_list, target_len, rand_pad=True):
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
-def read_packet_lines(f, num_features):
+def read_packet_lines(f, num_features, rand_pad=True):
     t0 = time.clock()
     raw_data = []
     raw_lengths = []
@@ -208,7 +211,7 @@ def read_packet_lines(f, num_features):
         fields = re.sub(r'\W', " ", line).split()
         intfields = [int(x,16) for x in fields]
         raw_lengths.append(len(intfields))
-        raw_data.append(pad_or_truncate(intfields, num_features))
+        raw_data.append(pad_or_truncate(intfields, num_features, rand_pad))
 
     X = raw_data
     Y = raw_lengths
@@ -218,7 +221,7 @@ def read_packet_lines(f, num_features):
                (len(raw_data), min(raw_lengths), max(raw_lengths), t1-t0))
     return [X, Y]
 
-def read_packet_lines_yprepend(f, num_features):
+def read_packet_lines_yprepend(f, num_features, rand_pad=True):
     """Read packet lines, but in this case, the first field is an integer (not
     hex-encoded) that represents that y-value corresponding to the rest of the
     line, i.e., the x-vector.  For example, in yprepend mode, the line:
@@ -242,7 +245,7 @@ def read_packet_lines_yprepend(f, num_features):
         y = int(fields[0])
         int_xfields = [int(x,16) for x in fields[1:]]
         raw_lengths.append(len(int_xfields))
-        raw_x.append(pad_or_truncate(int_xfields, num_features))
+        raw_x.append(pad_or_truncate(int_xfields, num_features, rand_pad))
         raw_y.append(y)
 
     X = raw_x
