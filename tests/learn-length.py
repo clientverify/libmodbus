@@ -59,6 +59,8 @@ def main():
 output, where the last number (output) must be 1 and
 the first number is the number of input features.
 Example: 500 30 20 1""")
+    parser.add_argument('-y', '--yprepend', action='store_true',
+                        help="for each line's Y, use 1st element, not length")
     parser.add_argument('-b', '--batchsize', metavar='B', type=int,
                         default=500, help="batch size (default 500)")
     parser.add_argument('-e', '--epochs', metavar='E', type=int,
@@ -123,7 +125,10 @@ Example: 500 30 20 1""")
             inputfp = open(args.input, "r")
     else:
         inputfp = sys.stdin
-    X, Y = read_packet_lines(inputfp, INPUT_FEATURES)
+    if args.yprepend:
+        X, Y = read_packet_lines_yprepend(inputfp, INPUT_FEATURES)
+    else:
+        X, Y = read_packet_lines(inputfp, INPUT_FEATURES)
 
     # Split into training and dev sets
     if args.devsize is None:
@@ -209,8 +214,45 @@ def read_packet_lines(f, num_features):
     Y = raw_lengths
     t1 = time.clock()
     if args.verbose:
-        eprint("Loaded %d samples ranging from %d-%d bytes in %f seconds" %
+        eprint("Loaded %d samples ranging from %d-%d bytes in %f seconds." %
                (len(raw_data), min(raw_lengths), max(raw_lengths), t1-t0))
+    return [X, Y]
+
+def read_packet_lines_yprepend(f, num_features):
+    """Read packet lines, but in this case, the first field is an integer (not
+    hex-encoded) that represents that y-value corresponding to the rest of the
+    line, i.e., the x-vector.  For example, in yprepend mode, the line:
+
+    14 [00][01][00][00][00][08][FF][0F][00][2E][00][06][01][20]
+
+    Is equivalent to the following in normal mode (no yprepend).
+
+    [00][01][00][00][00][08][FF][0F][00][2E][00][06][01][20]
+
+    The yprepend mode enables us to specify a y-value that the machine learning
+    should predict that is not simply the original byte length of the packet.
+    """
+    t0 = time.clock()
+    raw_x = []
+    raw_y = []
+    raw_lengths = []
+    for line in f:
+        # ignore non-alphanumeric characters like "[" and "]"
+        fields = re.sub(r'\W', " ", line).split()
+        y = int(fields[0])
+        int_xfields = [int(x,16) for x in fields[1:]]
+        raw_lengths.append(len(int_xfields))
+        raw_x.append(pad_or_truncate(int_xfields, num_features))
+        raw_y.append(y)
+
+    X = raw_x
+    Y = raw_y
+    assert len(X) == len(Y)
+    t1 = time.clock()
+    if args.verbose:
+        eprint("Loaded %d samples ranging from %d-%d bytes in %f seconds." %
+               (len(X), min(raw_lengths), max(raw_lengths), t1-t0))
+        eprint("Y range of loaded data: %d-%d." % (min(Y), max(Y)))
     return [X, Y]
 
 def normalize_tensor(X, Xmean=None, Xstd=None):
